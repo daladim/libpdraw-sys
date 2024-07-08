@@ -135,7 +135,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "libpdraw-vsink-sys"
+name = "libpdraw-sys"
 version = "7.5.0"
 dependencies = [
  "bindgen",
