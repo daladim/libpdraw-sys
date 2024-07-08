@@ -1,8 +1,16 @@
 [package]
 author = "daladim"
-name = "libpdraw-vsink-sys"
+name = "libpdraw-sys"
 version = "7.5.0"
 edition = "2021"
+license = "MIT"
+readme = "README.md"
+description = "Rust wrappers over Parrot's libpdraw library"
+homepage = "https://github.com/daladim/libpdraw-sys"
+repository = "https://github.com/daladim/libpdraw-sys"
+documentation = "https://docs.rs/libpdraw-sys"
+keywords = ["Parrot", "pdraw", "Anafi", "drone"]
+categories = ["api-bindings", "multimedia", "aerospace::drones"]
 
 [build-dependencies]
 bindgen = "0.69"
