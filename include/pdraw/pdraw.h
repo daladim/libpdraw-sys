@@ -1,0 +1,1702 @@
+/**
+ * Parrot Drones Awesome Video Viewer Library
+ *
+ * Copyright (c) 2018 Parrot Drones SAS
+ * Copyright (c) 2016 Aurelien Barre
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *   * Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *   * Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution.
+ *   * Neither the name of the copyright holders nor the names of its
+ *     contributors may be used to endorse or promote products derived from
+ *     this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#ifndef _PDRAW_H_
+#define _PDRAW_H_
+
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
+#include <inttypes.h>
+
+#include "pdraw_defs.h"
+
+
+/* Forward declarations */
+struct pdraw;
+struct pdraw_demuxer;
+struct pdraw_muxer;
+struct pdraw_video_renderer;
+struct pdraw_coded_video_sink;
+struct pdraw_raw_video_sink;
+
+
+/* General callback functions */
+struct pdraw_cbs {
+	/* Stop response callback function, called when a stop operation is
+	 * complete or has failed (optional, can be null, but highly recommended
+	 * for correct PDrAW session management).
+	 * The status parameter is the stop operation status: 0 on success,
+	 * or a negative errno value in case of error.
+	 * @param pdraw: PDrAW instance handle
+	 * @param status: 0 on success, negative errno value in case of error
+	 * @param userdata: user data pointer */
+	void (*stop_resp)(struct pdraw *pdraw, int status, void *userdata);
+
+	/* Media added callback function, called when a media has been added
+	 * internally in the PDrAW pipeline. Medias are for example raw or coded
+	 * video medias. The info structure gives the media identifier that can
+	 * be used for example to create a video sink on this media.
+	 * @param pdraw: PDrAW instance handle
+	 * @param info: pointer on the media information
+	 * @param userdata: user data pointer */
+	void (*media_added)(struct pdraw *pdraw,
+			    const struct pdraw_media_info *info,
+			    void *userdata);
+
+	/* Media removed callback function, called when a media has been removed
+	 * internally from the PDrAW pipeline. Medias are for example raw or
+	 * coded video medias. When a media is removed, any video sink created
+	 * on this media must then be stopped.
+	 * @param pdraw: PDrAW instance handle
+	 * @param info: pointer on the media information
+	 * @param userdata: user data pointer */
+	void (*media_removed)(struct pdraw *pdraw,
+			      const struct pdraw_media_info *info,
+			      void *userdata);
+
+	/* Socket creation callback function, called immediately after a
+	 * socket creation with its file descriptor as parameter (optional,
+	 * can be null).
+	 * @param pdraw: PDrAW instance handle
+	 * @param fd: socket file descriptor
+	 * @param userdata: user data pointer */
+	void (*socket_created)(struct pdraw *pdraw, int fd, void *userdata);
+};
+
+
+/* Demuxer callback functions */
+struct pdraw_demuxer_cbs {
+	/* Open response callback function, called when an open operation is
+	 * complete or has failed (optional, can be null, but highly recommended
+	 * for correct PDrAW session management).
+	 * The status parameter is the open operation status: 0 on success,
+	 * or a negative errno value in case of error.
+	 * If this function reports an error, the demuxer still needs to be
+	 * closed: pdraw_demuxer_close() must be called and one must wait for
+	 * the close_resp callback function to be issued prior to calling
+	 * pdraw_demuxer_destroy().
+	 * @param pdraw: PDrAW instance handle
+	 * @param demuxer: demuxer handle
+	 * @param status: 0 on success, negative errno value in case of error
+	 * @param userdata: user data pointer */
+	void (*open_resp)(struct pdraw *pdraw,
+			  struct pdraw_demuxer *demuxer,
+			  int status,
+			  void *userdata);
+
+	/* Close response callback function, called when a close operation is
+	 * complete or has failed (optional, can be null, but highly recommended
+	 * for correct PDrAW session management).
+	 * The status parameter is the close operation status: 0 on success,
+	 * or a negative errno value in case of error.
+	 * @param pdraw: PDrAW instance handle
+	 * @param demuxer: demuxer handle
+	 * @param status: 0 on success, negative errno value in case of error
+	 * @param userdata: user data pointer */
+	void (*close_resp)(struct pdraw *pdraw,
+			   struct pdraw_demuxer *demuxer,
+			   int status,
+			   void *userdata);
+
+	/* Unrecoverable error callback function, called when a previously
+	 * opened session is no longer running. When this function is called,
+	 * the demuxer session is no longer running; pdraw_demuxer_close() must
+	 * be called and one must wait for the close_resp callback function to
+	 * be issued prior to calling pdraw_demuxer_destroy().
+	 * @param pdraw: PDrAW instance handle
+	 * @param demuxer: demuxer handle
+	 * @param userdata: user data pointer */
+	void (*unrecoverable_error)(struct pdraw *pdraw,
+				    struct pdraw_demuxer *demuxer,
+				    void *userdata);
+
+	/* Demuxer media selection callback function, called with a list of
+	 * video medias found from which the application must choose one or more
+	 * to process in the pipeline. The return value of the callback function
+	 * must be a bitfield of the identifiers of the chosen medias (from the
+	 * pdraw_demuxer_media structure), or 0 to choose the default medias. If
+	 * the return value is -ENOSYS, the callback is considered not
+	 * implemented and the default medias are chosen. If the return value is
+	 * -ECANCELED no media is chosen and the open operation is aborted. If
+	 * the return value is another negative errno or an invalid bitfield the
+	 * open_resp callback function will be called if an open operation is in
+	 * progress, or the unrecoverable_error callback function otherwise.
+	 * @param pdraw: PDrAW instance handle
+	 * @param demuxer: demuxer handle
+	 * @param medias: array of demuxer media
+	 * @param count: demuxer media array element count
+	 * @param userdata: user data pointer
+	 * @return a bitfield of the identifiers of the chosen medias,
+	 *         0 or -ENOSYS to choose the default medias,
+	 *         -ECANCELED to choose no media and abort the open operation,
+	 *         or another negative errno value in case of error */
+	int (*select_media)(struct pdraw *pdraw,
+			    struct pdraw_demuxer *demuxer,
+			    const struct pdraw_demuxer_media *medias,
+			    size_t count,
+			    void *userdata);
+
+	/* Ready to play callback function, called when the playback is ready
+	 * to start (optional, can be null). This function is called to indicate
+	 * that the PDrAW session is ready to process play operations.
+	 * Generally the session is ready to play as soon as the open_resp
+	 * callback function has been called with a success status. One case
+	 * when the open operation was successful and the playback is not ready
+	 * is when connected to a SkyController's RTSP server but the
+	 * SkyController itself is not yet connected to a drone. Similarly,
+	 * when connected to a drone's stream through a SkyController's RTSP
+	 * server, if the drone is disconnected from the SkyController, this
+	 * function will be called with a 0 value in the ready parameter.
+	 * @param pdraw: PDrAW instance handle
+	 * @param demuxer: demuxer handle
+	 * @param ready: 1 if the session is ready to play, 0 otherwise
+	 * @param userdata: user data pointer */
+	void (*ready_to_play)(struct pdraw *pdraw,
+			      struct pdraw_demuxer *demuxer,
+			      int ready,
+			      void *userdata);
+
+	/* End of range callback function, called when the playback is suspended
+	 * after having reached the end of the playback duration (optional,
+	 * can be null). This function is only called for replays (either local
+	 * or streamed), not for live streams. The timestamp parameter is the
+	 * current play time in microseconds at the moment the playback is
+	 * suspended.
+	 * @param pdraw: PDrAW instance handle
+	 * @param demuxer: demuxer handle
+	 * @param timestamp: current playback time in microseconds
+	 * @param userdata: user data pointer */
+	void (*end_of_range)(struct pdraw *pdraw,
+			     struct pdraw_demuxer *demuxer,
+			     uint64_t timestamp,
+			     void *userdata);
+
+	/* Play response callback function, called when a play operation is
+	 * complete (the playback has started) or has failed (optional, can be
+	 * null). The status parameter is the play operation status: 0 on
+	 * success, or a negative errno value in case of error. The timestamp
+	 * parameter is the current play time in microseconds at the moment the
+	 * playback is started. The speed parameter is the current playback
+	 * speed; a negative value means playing backward.
+	 * @param pdraw: PDrAW instance handle
+	 * @param demuxer: demuxer handle
+	 * @param status: 0 on success, negative errno value in case of error
+	 * @param timestamp: current playback time in microseconds
+	 * @param speed: current playback speed, negative means backward
+	 * @param userdata: user data pointer */
+	void (*play_resp)(struct pdraw *pdraw,
+			  struct pdraw_demuxer *demuxer,
+			  int status,
+			  uint64_t timestamp,
+			  float speed,
+			  void *userdata);
+
+	/* Pause response callback function, called when a pause operation is
+	 * complete (the playback is suspended) or has failed (optional, can be
+	 * null). The status parameter is the pause operation status: 0 on
+	 * success, or a negative errno value in case of error. The timestamp
+	 * parameter is the current play time in microseconds at the moment the
+	 * playback is paused.
+	 * @param pdraw: PDrAW instance handle
+	 * @param demuxer: demuxer handle
+	 * @param status: 0 on success, negative errno value in case of error
+	 * @param timestamp: current playback time in microseconds
+	 * @param userdata: user data pointer */
+	void (*pause_resp)(struct pdraw *pdraw,
+			   struct pdraw_demuxer *demuxer,
+			   int status,
+			   uint64_t timestamp,
+			   void *userdata);
+
+	/* Seek response callback function, called when a seek operation is
+	 * complete or has failed (optional, can be null).
+	 * The status parameter is the seek operation status: 0 on success,
+	 * or a negative errno value in case of error. The timestamp parameter
+	 * is the current play time in microseconds after seeking. The speed
+	 * parameter is the current playback speed; a negative value means
+	 * playing backward.
+	 * @param pdraw: PDrAW instance handle
+	 * @param demuxer: demuxer handle
+	 * @param status: 0 on success, negative errno value in case of error
+	 * @param timestamp: current playback time in microseconds
+	 * @param speed: current playback speed, negative means backward
+	 * @param userdata: user data pointer */
+	void (*seek_resp)(struct pdraw *pdraw,
+			  struct pdraw_demuxer *demuxer,
+			  int status,
+			  uint64_t timestamp,
+			  float speed,
+			  void *userdata);
+};
+
+
+/* Video renderer callback functions */
+struct pdraw_video_renderer_cbs {
+	/* Media added callback function, called when a media has been added
+	 * internally to the renderer. Medias are raw video medias.
+	 * This function is called from the pomp_loop thread.
+	 * @param pdraw: PDrAW instance handle
+	 * @param renderer: renderer handle
+	 * @param info: pointer on the media information
+	 * @param userdata: user data pointer */
+	void (*media_added)(struct pdraw *pdraw,
+			    struct pdraw_video_renderer *renderer,
+			    const struct pdraw_media_info *info,
+			    void *userdata);
+
+	/* Media removed callback function, called when a media has been removed
+	 * internally from the renderer. Medias are raw video medias.
+	 * This function is called from the pomp_loop thread.
+	 * @param pdraw: PDrAW instance handle
+	 * @param renderer: renderer handle
+	 * @param info: pointer on the media information
+	 * @param userdata: user data pointer */
+	void (*media_removed)(struct pdraw *pdraw,
+			      struct pdraw_video_renderer *renderer,
+			      const struct pdraw_media_info *info,
+			      void *userdata);
+
+	/* Render ready callback function, called both when a new frame is
+	 * ready for rendering and periodically (optional, can be null).
+	 * This function is called from the pomp_loop thread.
+	 * @param pdraw: PDrAW instance handle
+	 * @param renderer: renderer handle
+	 * @param userdata: user data pointer */
+	void (*render_ready)(struct pdraw *pdraw,
+			     struct pdraw_video_renderer *renderer,
+			     void *userdata);
+
+	/* External texture loading callback function (optional, can be null).
+	 * This function is called before the rendering of the video frame in
+	 * order to override the frame loading as a texture. This can be used
+	 * to transform the video frames outside of PDrAW before resuming the
+	 * rendering. This function is called from the rendering thread.
+	 * @param pdraw: PDrAW instance handle
+	 * @param renderer: renderer handle
+	 * @param texture_width: texture width in pixels
+	 * @param texture_height: texture height in pixels
+	 * @param media_info: media information
+	 * @param frame: frame information
+	 * @param frame_userdata: frame user data buffer
+	 * @param frame_userdata_len: frame user data buffer size in bytes
+	 * @param userdata: user data pointer
+	 * @return 0 on success, negative errno value in case of error */
+	int (*load_texture)(struct pdraw *pdraw,
+			    struct pdraw_video_renderer *renderer,
+			    unsigned int texture_width,
+			    unsigned int texture_height,
+			    const struct pdraw_media_info *media_info,
+			    struct mbuf_raw_video_frame *frame,
+			    const void *frame_userdata,
+			    size_t frame_userdata_len,
+			    void *userdata);
+
+	/* Overlay rendering callback function (optional, can be null).
+	 * This function is called after the rendering of the video frame
+	 * (if one is available) in order to render an application overlay
+	 * on top of the video. When HMD distorsion correction is enabled
+	 * in the renderer, it is applied after the overlay rendering.
+	 * When no frame is available for the rendering, the frame_meta
+	 * and frame_extra parameters are NULL. This function is called
+	 * from the rendering thread.
+	 * @param pdraw: PDrAW instance handle
+	 * @param renderer: renderer handle
+	 * @param render_pos: rendering position
+	 * @param content_pos: video content position
+	 * @param view_mat: 4x4 view matrix
+	 * @param proj_mat: 4x4 projection matrix
+	 * @param media_info: media information
+	 * @param frame_meta: frame metadata (optional, can be NULL)
+	 * @param frame_extra: frame extra information (optional, can be NULL)
+	 * @param userdata: user data pointer */
+	void (*render_overlay)(
+		struct pdraw *pdraw,
+		struct pdraw_video_renderer *renderer,
+		const struct pdraw_rect *render_pos,
+		const struct pdraw_rect *content_pos,
+		const float *view_mat,
+		const float *proj_mat,
+		const struct pdraw_media_info *media_info,
+		struct vmeta_frame *frame_meta,
+		const struct pdraw_video_frame_extra *frame_extra,
+		void *userdata);
+};
+
+
+/* Coded video sink callback functions */
+struct pdraw_coded_video_sink_cbs {
+	/* Coded video sink flush callback function, called when flushing is
+	 * required (mandatory). When this function is called, the application
+	 * must flush the sink queue by calling
+	 * mbuf_coded_video_frame_queue_flush() and must return all frames
+	 * outside of the queue by calling mbuf_coded_video_frame_unref(); once
+	 * the flushing is done, the pdraw_coded_video_sink_queue_flushed()
+	 * function must be called.
+	 * @param pdraw: PDrAW instance handle
+	 * @param sink: coded video sink handle
+	 * @param userdata: user data pointer */
+	void (*flush)(struct pdraw *pdraw,
+		      struct pdraw_coded_video_sink *sink,
+		      void *userdata);
+};
+
+
+/* Raw video sink callback functions */
+struct pdraw_raw_video_sink_cbs {
+	/* Raw video sink flush callback function, called when flushing is
+	 * required (mandatory). When this function is called, the application
+	 * must flush the sink queue by calling
+	 * mbuf_raw_video_frame_queue_flush() and must return all frames outside
+	 * of the queue by calling mbuf_raw_video_frame_unref(); once the
+	 * flushing is done, the pdraw_raw_video_sink_queue_flushed() function
+	 * must be called.
+	 * @param pdraw: PDrAW instance handle
+	 * @param sink: raw video sink handle
+	 * @param userdata: user data pointer */
+	void (*flush)(struct pdraw *pdraw,
+		      struct pdraw_raw_video_sink *sink,
+		      void *userdata);
+};
+
+
+/**
+ * Instance management API
+ */
+
+/**
+ * Create a PDrAW instance.
+ * A running pomp_loop must be provided; all functions (with the exception of
+ * rendering functions) must be called from the pomp_loop thread; all callback
+ * functions (with the exception of rendering callbacks) are issued from the
+ * pomp_loop thread. The callbacks structure must be provided but all callback
+ * functions are optional. However, for correct management of the session it is
+ * highly recommended to implement at least the open_resp and close_resp
+ * functions. The instance handle is returned through the ret_obj parameter.
+ * When no longer needed, the instance must be freed using the pdraw_destroy()
+ * function. The pdraw_stop() function must be called and one must wait for the
+ * stop_resp callback function to be issued prior to calling pdraw_destroy().
+ * @param loop: pomp_loop to use
+ * @param cbs: PDrAW callback functions
+ * @param userdata: callback functions user data (optional, can be null)
+ * @param ret_obj: PDrAW instance handle (output)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_new(struct pomp_loop *loop,
+			const struct pdraw_cbs *cbs,
+			void *userdata,
+			struct pdraw **ret_obj);
+
+
+/**
+ * Free a PDrAW instance.
+ * This function frees all resources associated with a PDrAW instance.
+ * If a successful pdraw_open_*() was made, the pdraw_close() function must
+ * be called and one must wait for the close_resp callback function to be
+ * issued prior to calling pdraw_destroy().
+ * @param pdraw: PDrAW instance handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_destroy(struct pdraw *pdraw);
+
+
+/**
+ * Stop a PDrAW instance.
+ * This function stops a PDrAW instance and all the associated objects.
+ * The function returns before the actual stopping is done. If the function
+ * returns 0, the stop_resp callback function will be called once the stopping
+ * is successful (0 status) or has failed (negative errno status). If the
+ * function returns a negative errno value (immediate failure), the stop_resp
+ * callback function will not be called. After a successful stop, the PDrAW
+ * instance must be destroyed by calling pdraw_destroy().
+ * @param pdraw: PDrAW instance handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_stop(struct pdraw *pdraw);
+
+
+/**
+ * Demuxer API
+ */
+
+/**
+ * Create a demuxer on a URL (stream or local file).
+ * The URL can be either an RTSP URL (starting with "rtsp://") or a local file
+ * path (either absolute or relative).
+ * The function returns before the actual opening is done. If the function
+ * returns 0, the open_resp callback function will be issued once the open
+ * operation is successful (0 status) or has failed (negative errno status).
+ * If the function returns a negative errno value (immediate failure), the
+ * open_resp callback function will not be issued.
+ * Once a demuxer is no longer used, it must be closed and then destroyed
+ * (@see the pdraw_demuxer_close() function).
+ * @param pdraw: PDrAW instance handle
+ * @param url: URL of the resource to open
+ * @param cbs: demuxer callback functions
+ * @param userdata: callback functions user data (optional, can be null)
+ * @param ret_obj: demuxer handle (output)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_demuxer_new_from_url(struct pdraw *pdraw,
+					 const char *url,
+					 const struct pdraw_demuxer_cbs *cbs,
+					 void *userdata,
+					 struct pdraw_demuxer **ret_obj);
+
+
+/**
+ * Create a demuxer on a single stream.
+ * This function opens an RTP/AVP stream. No session management is done: it
+ * is the application's responsibility to handle the ports negociation with
+ * the sender. If null local ports are given as parameter, the effective port
+ * numbers used can be retrieved using the
+ * pdraw_get_single_stream_local_stream_port() for the RTP port and
+ * pdraw_get_single_stream_local_control_port() for the RTCP functions.
+ * If the local_addr parameter is left null, any local network interface will
+ * be used. The remote_addr, remote_stream_port and remote_control_port
+ * parameters can be left null if unknown; they will be known once the stream
+ * is being received.
+ * The function returns before the actual opening is done. If the function
+ * returns 0, the open_resp callback function will be issued once the open
+ * operation is successful (0 status) or has failed (negative errno status).
+ * If the function returns a negative errno value (immediate failure), the
+ * open_resp callback function will not be issued.
+ * Once a demuxer is no longer used, it must be closed and then destroyed
+ * (@see the pdraw_demuxer_close() function).
+ * @param pdraw: PDrAW instance handle
+ * @param local_addr: local IP address (optional, can be NULL)
+ * @param local_stream_port: local stream (RTP) port (optional, can be 0)
+ * @param local_control_port: local control (RTCP) port (optional, can be 0)
+ * @param remote_addr: remote IP address (optional, can be NULL)
+ * @param remote_stream_port: remote stream (RTP) port (optional, can be 0)
+ * @param remote_control_port: remote control (RTCP) port (optional, can be 0)
+ * @param cbs: demuxer callback functions
+ * @param userdata: callback functions user data (optional, can be null)
+ * @param ret_obj: demuxer handle (output)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_demuxer_new_single_stream(struct pdraw *pdraw,
+				const char *local_addr,
+				uint16_t local_stream_port,
+				uint16_t local_control_port,
+				const char *remote_addr,
+				uint16_t remote_stream_port,
+				uint16_t remote_control_port,
+				const struct pdraw_demuxer_cbs *cbs,
+				void *userdata,
+				struct pdraw_demuxer **ret_obj);
+
+
+/**
+ * Create a demuxer on a stream URL through a mux channel.
+ * The URL must be an RTSP URL (starting with "rtsp://"). Mux channels are used
+ * to transfer data between a SkyController remote and a smartphone through USB;
+ * see Parrot's libmux for more information.
+ * No concurrent sessions can run on the mux channel; therefore the user must
+ * take care of limiting the number of PDrAW instances and demuxer objects
+ * running on the mux channel to only one.
+ * The function returns before the actual opening is done. If the function
+ * returns 0, the open_resp callback function will be issued once the open
+ * operation is successful (0 status) or has failed (negative errno status).
+ * If the function returns a negative errno value (immediate failure), the
+ * open_resp callback function will not be issued.
+ * Once a demuxer is no longer used, it must be closed and then destroyed
+ * (@see the pdraw_demuxer_close() function).
+ * @param pdraw: PDrAW instance handle
+ * @param url: URL of the resource to open
+ * @param mux: mux instance handle
+ * @param cbs: demuxer callback functions
+ * @param userdata: callback functions user data (optional, can be null)
+ * @param ret_obj: demuxer handle (output)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_demuxer_new_from_url_on_mux(struct pdraw *pdraw,
+				  const char *url,
+				  struct mux_ctx *mux,
+				  const struct pdraw_demuxer_cbs *cbs,
+				  void *userdata,
+				  struct pdraw_demuxer **ret_obj);
+
+
+/**
+ * Destroy a demuxer.
+ * This function stops a running demuxer and frees the associated resources.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_demuxer_destroy(struct pdraw *pdraw,
+				    struct pdraw_demuxer *demuxer);
+
+
+/**
+ * Close a demuxer.
+ * This function closes a previously opened demuxer (either record or stream).
+ * The function returns before the actual closing is done. If the function
+ * returns 0, the close_resp callback function will be issued once the close is
+ * successful (0 status) or has failed (negative errno status). If the function
+ * returns a negative errno value (immediate failure), the close_resp callback
+ * function will not be issued. After a successful close, the demuxer must be
+ * destroyed by calling pdraw_demuxer_destroy().
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_demuxer_close(struct pdraw *pdraw,
+				  struct pdraw_demuxer *demuxer);
+
+
+/**
+ * Get the single stream local stream port.
+ * This function returns the local stream (RTP) port currently in use after
+ * a succesful open operation on a single stream (RTP/AVP) or an RTSP URL.
+ * If no open operation has been done, or if an open operation has been done
+ * on a mux channel, 0 is returned.
+ * This is useful when calling pdraw_open_single_stream() with null local
+ * ports to let PDrAW open sockets on any available port.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @return the stream port on success, 0 in case of error
+ */
+PDRAW_API uint16_t pdraw_demuxer_get_single_stream_local_stream_port(
+	struct pdraw *pdraw,
+	struct pdraw_demuxer *demuxer);
+
+
+/**
+ * Get the single stream local control port.
+ * This function returns the local control (RTCP) port currently in use after
+ * a succesful open operation on a single stream (RTP/AVP) or an RTSP URL.
+ * If no open operation has been done, or if an open operation has been done
+ * on a mux channel, 0 is returned.
+ * This is useful when calling pdraw_open_single_stream() with null local
+ * ports to let PDrAW open sockets on any available port.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @return the stream port on success, 0 in case of error
+ */
+PDRAW_API uint16_t pdraw_demuxer_get_single_stream_local_control_port(
+	struct pdraw *pdraw,
+	struct pdraw_demuxer *demuxer);
+
+
+/**
+ * Get the ready to play status.
+ * This function returns 1 if a successful open operation has been completed
+ * and if the playback is ready to start, 0 otherwise. One case when a
+ * successful open operation is complete but the playback is not ready is when
+ * connected to a SkyController's RTSP server but the SkyController itself is
+ * not yet connected to a drone.
+ * The value returned by this function is identical to the ready parameter
+ * passed to the ready_to_play callback function when it is issued.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @return the ready to play status on success, 0 in case of error
+ */
+PDRAW_API int pdraw_demuxer_is_ready_to_play(struct pdraw *pdraw,
+					     struct pdraw_demuxer *demuxer);
+
+
+/**
+ * Get the pause status.
+ * This function returns 1 if the playback is currently paused, 0 otherwise.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @return the pause status on success, 0 in case of error
+ */
+PDRAW_API int pdraw_demuxer_is_paused(struct pdraw *pdraw,
+				      struct pdraw_demuxer *demuxer);
+
+
+/**
+ * Play at normal speed (x1.0).
+ * This function starts the playback of the video.
+ * The function returns before the actual operation is done. If the function
+ * returns 0, the play_resp callback function will be issued once the play is
+ * successful (0 status) or has failed (negative errno status). If the function
+ * returns a negative errno value (immediate failure), the play_resp callback
+ * function will not be issued.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_demuxer_play(struct pdraw *pdraw,
+				 struct pdraw_demuxer *demuxer);
+
+
+/**
+ * Play at the given speed.
+ * This function starts the playback of the video. If the speed parameter is
+ * negative, the video is played backward. If the speed is greater than or
+ * equal to PDRAW_PLAY_SPEED_MAX, the speed is ignored and the video is played
+ * at the maximum speed achievable. If the speed is less than or equal to
+ * -PDRAW_PLAY_SPEED_MAX, the speed is ignored and the video is played backward
+ * at the maximum speed achievable. A 0.0 speed has the same effet as calling
+ * the pdraw_pause() function. On a live stream, the speed parameter has
+ * no effect.
+ * The function returns before the actual operation is done. If the function
+ * returns 0, the play_resp callback function will be issued once the play is
+ * successful (0 status) or has failed (negative errno status). If the function
+ * returns a negative errno value (immediate failure), the play_resp callback
+ * function will not be issued.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @param speed: playback speed (0.0 means pause, negative value means
+ *               play backward)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_demuxer_play_with_speed(struct pdraw *pdraw,
+					    struct pdraw_demuxer *demuxer,
+					    float speed);
+
+
+/**
+ * Pause the playback.
+ * This function suspends the playback of the video. The session is not closed
+ * and the playback can be resumed using the play functions.
+ * The function returns before the actual operation is done. If the function
+ * returns 0, the pause_resp callback function will be issued once the pause is
+ * successful (0 status) or has failed (negative errno status). If the function
+ * returns a negative errno value (immediate failure), the pause_resp callback
+ * function will not be issued.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_demuxer_pause(struct pdraw *pdraw,
+				  struct pdraw_demuxer *demuxer);
+
+
+/**
+ * Go to previous frame in frame-by-frame playback.
+ * This function plays the previous frame while the playback is paused. If the
+ * playback is not currently paused an error is returned. Frame-by-frame is
+ * only available on local replays (MP4 records).
+ * The function returns before the actual operation is done. If the function
+ * returns 0, the seek_resp callback function will be issued once the seek is
+ * successful (0 status) or has failed (negative errno status). If the function
+ * returns a negative errno value (immediate failure), the seek_resp callback
+ * function will not be issued.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_demuxer_previous_frame(struct pdraw *pdraw,
+					   struct pdraw_demuxer *demuxer);
+
+
+/**
+ * Go to next frame in frame-by-frame playback.
+ * This function plays the next frame while the playback is paused. If the
+ * playback is not currently paused an error is returned. Frame-by-frame is
+ * only available on local replays (MP4 records).
+ * The function returns before the actual operation is done. If the function
+ * returns 0, the seek_resp callback function will be issued once the seek is
+ * successful (0 status) or has failed (negative errno status). If the function
+ * returns a negative errno value (immediate failure), the seek_resp callback
+ * function will not be issued.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_demuxer_next_frame(struct pdraw *pdraw,
+				       struct pdraw_demuxer *demuxer);
+
+
+/**
+ * Seek forward or backward.
+ * This function seeks forward (positive delta) or backward (negative delta).
+ * The delta parameter is in microseconds. The exact parameter is a boolean
+ * value; when exact is 0 the seek is done to the nearest synchronization sample
+ * preceeding the delta, otherwise the seek is done to the sample nearest to the
+ * delta. Seeking is only available on replays (either local or streamed),
+ * not on live streams.
+ * The function returns before the actual operation is done. If the function
+ * returns 0, the seek_resp callback function will be issued once the seek is
+ * successful (0 status) or has failed (negative errno status). If the function
+ * returns a negative errno value (immediate failure), the seek_resp callback
+ * function will not be issued.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @param delta: time delta in microseconds (positive or negative)
+ * @param exact: 1 means seek to the sample closest to the delta, 0 means seek
+ *               to the nearest synchronization sample preceeding the delta
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_demuxer_seek(struct pdraw *pdraw,
+				 struct pdraw_demuxer *demuxer,
+				 int64_t delta,
+				 int exact);
+
+
+/**
+ * Seek forward.
+ * This function seeks forward by delta microseconds. It has the same
+ * behavior as calling pdraw_seek() with a positive delta. The exact parameter
+ * is a boolean value; when exact is 0 the seek is done to the nearest
+ * synchronization sample preceeding the delta, otherwise the seek is done to
+ * the sample nearest to the delta. Seeking is only available on replays
+ * (either local or streamed), not on live streams.
+ * The function returns before the actual operation is done. If the function
+ * returns 0, the seek_resp callback function will be issued once the seek is
+ * successful (0 status) or has failed (negative errno status). If the function
+ * returns a negative errno value (immediate failure), the seek_resp callback
+ * function will not be issued.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @param delta: positive time delta forward in microseconds
+ * @param exact: 1 means seek to the sample closest to the delta, 0 means seek
+ *               to the nearest synchronization sample preceeding the delta
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_demuxer_seek_forward(struct pdraw *pdraw,
+					 struct pdraw_demuxer *demuxer,
+					 uint64_t delta,
+					 int exact);
+
+
+/**
+ * Seek backward.
+ * This function seeks backward by delta microseconds (postive). It has the same
+ * behavior as calling pdraw_seek() with a negative delta. The exact parameter
+ * is a boolean value; when exact is 0 the seek is done to the nearest
+ * synchronization sample preceeding the delta, otherwise the seek is done to
+ * the sample nearest to the delta. Seeking is only available on replays
+ * (either local or streamed), not on live streams.
+ * The function returns before the actual operation is done. If the function
+ * returns 0, the seek_resp callback function will be issued once the seek is
+ * successful (0 status) or has failed (negative errno status). If the function
+ * returns a negative errno value (immediate failure), the seek_resp callback
+ * function will not be issued.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @param delta: positive time delta backward in microseconds
+ * @param exact: 1 means seek to the sample closest to the delta, 0 means seek
+ *               to the nearest synchronization sample preceeding the delta
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_demuxer_seek_back(struct pdraw *pdraw,
+				      struct pdraw_demuxer *demuxer,
+				      uint64_t delta,
+				      int exact);
+
+
+/**
+ * Seek to a given time.
+ * This function seeks to the given play timestamp in microseconds. The exact
+ * parameter is a boolean value; when exact is 0 the seek is done to the nearest
+ * synchronization sample preceeding the timestamp, otherwise the seek is done
+ * to the sample nearest to the timestamp. Seeking is only available on replays
+ * (either local or streamed), not on live streams.
+ * The function returns before the actual operation is done. If the function
+ * returns 0, the seek_resp callback function will be issued once the seek is
+ * successful (0 status) or has failed (negative errno status). If the function
+ * returns a negative errno value (immediate failure), the seek_resp callback
+ * function will not be issued.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @param timestamp: play timestamp in microseconds
+ * @param exact: 1 means seek to the sample closest to the timestamp,
+ *               0 means seek to the nearest synchronization sample
+ *               preceeding the timestamp
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_demuxer_seek_to(struct pdraw *pdraw,
+				    struct pdraw_demuxer *demuxer,
+				    uint64_t timestamp,
+				    int exact);
+
+
+/**
+ * Get the playback duration.
+ * This function returns the playback duration in microseconds. The duration is
+ * only available on replays (either local or streamed), not on live streams.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @return the duration in microseconds on success, 0 in case of error
+ */
+PDRAW_API uint64_t pdraw_demuxer_get_duration(struct pdraw *pdraw,
+					      struct pdraw_demuxer *demuxer);
+
+
+/**
+ * Get the playback current time.
+ * This function returns the current playback position in microseconds.
+ * On replays (either local or streamed) this is the position between 0 and
+ * the duration; on live streams this is the time since the start of the
+ * stream session.
+ * @param pdraw: PDrAW instance handle
+ * @param demuxer: demuxer handle
+ * @return the current time in microseconds on success, 0 in case of error
+ */
+PDRAW_API uint64_t
+pdraw_demuxer_get_current_time(struct pdraw *pdraw,
+			       struct pdraw_demuxer *demuxer);
+
+
+/**
+ * Muxer API
+ */
+
+/**
+ * Create a muxer (experimental).
+ * This function creates a muxer with a given URL.
+ * Once the muxer is created medias can be added by id using the
+ * pdraw_muxer_add_media() function. Once a muxer is no longer used it must be
+ * destroyed by calling the pdraw_muxer_destroy() function. If writing to an
+ * MP4 file, the file is finalized in the pdraw_muxer_destroy() function.
+ * @note: experimental only, the function returns -ENOSYS
+ * @param pdraw: PDrAW instance handle
+ * @param url: destination URL
+ * @param ret_obj: muxer handle (output)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_muxer_new(struct pdraw *pdraw,
+			      const char *url,
+			      struct pdraw_muxer **ret_obj);
+
+
+/**
+ * Destroy a muxer.
+ * This function stops a running muxer and frees the associated resources.
+ * @param pdraw: PDrAW instance handle
+ * @param muxer: muxer handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_muxer_destroy(struct pdraw *pdraw,
+				  struct pdraw_muxer *muxer);
+
+
+/**
+ * Add a media to a muxer.
+ * This function adds a media to the muxer by its media_id. The media
+ * idenfifiers are known when the media_added or media_removed general
+ * callback functions are called.
+ * The params structure is only relevant for video medias; the structure must
+ * then be provided but all parameters are optional and can be left null.
+ * @param pdraw: PDrAW instance handle
+ * @param muxer: muxer handle
+ * @param media_id: identifier of the media to add to the muxer
+ * @param params: muxer video media parameters
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_muxer_add_media(struct pdraw *pdraw,
+		      struct pdraw_muxer *muxer,
+		      unsigned int media_id,
+		      const struct pdraw_muxer_video_media_params *params);
+
+
+/**
+ * Video renderer API
+ * @warning: all functions must be called from the application's
+ * rendering thread
+ */
+
+/**
+ * Create a video renderer.
+ * This function creates a video renderer on a media of the given media id;
+ * if the media id is zero the first raw media encountered is used.
+ * Once the renderer is created, the rendering is done by calling the
+ * pdraw_video_renderer_render*() functions. Once a renderer is no longer used
+ * it must be destroyed by calling the pdraw_video_renderer_destroy() function.
+ * The render_pos parameter sets the position and size of the rendering in the
+ * window/view; these coordinates are in pixels from the bottom-left corner
+ * (OpenGL coordinates). The params structure must be provided but all
+ * parameters are optional and can be left null.
+ * The callbacks structure must be provided but all callback functions are
+ * optional; all callback functions are called from the rendering thread,
+ * except the render_ready function which is called from the pomp_loop thread.
+ * @warning: this function must be called from the application's rendering
+ * thread.
+ * @param pdraw: PDrAW instance handle
+ * @param media_id: identifier of the raw media to render (from a
+ *                  pdraw_media_info structure); if zero the first
+ *                  raw media found is used for rendering
+ * @param render_pos: rendering position and size
+ * @param params: renderer parameters
+ * @param cbs: renderer callback functions
+ * @param userdata: callback functions user data (optional, can be null)
+ * @param ret_obj: renderer handle (output)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_video_renderer_new(struct pdraw *pdraw,
+			 unsigned int media_id,
+			 const struct pdraw_rect *render_pos,
+			 const struct pdraw_video_renderer_params *params,
+			 const struct pdraw_video_renderer_cbs *cbs,
+			 void *userdata,
+			 struct pdraw_video_renderer **ret_obj);
+
+
+/**
+ * Create a video renderer on an EGL display.
+ * This function creates a video renderer on an active EGL display context on a
+ * media of the given media id; if the media id is zero the first raw
+ * media encountered is used. Once the renderer is created, the rendering is
+ * done by calling the pdraw_video_renderer_render*() functions. Once a renderer
+ * is no longer used it must be destroyed by calling the
+ * pdraw_video_renderer_destroy() function. The render_pos parameter sets the
+ * position and size of the rendering in the window/view; these coordinates are
+ * in pixels from the bottom-left corner (OpenGL coordinates). The params
+ * structure must be provided but all parameters are optional and can be left
+ * null. The callbacks structure must be provided but all callback functions are
+ * optional; all callback functions are called from the rendering thread,
+ * except the render_ready function which is called from the pomp_loop thread.
+ * @warning: this function must be called from the application's rendering
+ * thread.
+ * @param pdraw: PDrAW instance handle
+ * @param media_id: identifier of the raw media to render (from a
+ *                  pdraw_media_info structure); if zero the first
+ *                  raw media found is used for rendering
+ * @param render_pos: rendering position and size
+ * @param params: renderer parameters
+ * @param cbs: renderer callback functions
+ * @param userdata: callback functions user data (optional, can be null)
+ * @param egl_display: EGL display context
+ * @param ret_obj: renderer handle (output)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_video_renderer_new_egl(struct pdraw *pdraw,
+			     unsigned int media_id,
+			     const struct pdraw_rect *render_pos,
+			     const struct pdraw_video_renderer_params *params,
+			     const struct pdraw_video_renderer_cbs *cbs,
+			     void *userdata,
+			     struct egl_display *egl_display,
+			     struct pdraw_video_renderer **ret_obj);
+
+
+/**
+ * Destroy a video renderer.
+ * This function stops a running video renderer and frees the associated
+ * resources.
+ * @warning: this function must be called from the application's rendering
+ * thread.
+ * @param pdraw: PDrAW instance handle
+ * @param renderer: renderer handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_video_renderer_destroy(struct pdraw *pdraw,
+			     struct pdraw_video_renderer *renderer);
+
+
+/**
+ * Resize a video renderer.
+ * This function updates the rendering position on a running video renderer.
+ * The render_pos parameter sets the position and size of the rendering in the
+ * window/view; these coordinates are in pixels from the bottom-left corner
+ * (OpenGL coordinates).
+ * @warning: this function must be called from the application's rendering
+ * thread.
+ * @param pdraw: PDrAW instance handle
+ * @param renderer: renderer handle
+ * @param render_pos: rendering position and size
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_video_renderer_resize(struct pdraw *pdraw,
+					  struct pdraw_video_renderer *renderer,
+					  const struct pdraw_rect *render_pos);
+
+
+/**
+ * Set the video renderer media identifier.
+ * This function updates the identifier of the media on which the rendering is
+ * done; if the media id is zero the first raw media encountered is used.
+ * @warning: this function must be called from the application's rendering
+ * thread.
+ * @param pdraw: PDrAW instance handle
+ * @param renderer: renderer handle
+ * @param media_id: identifier of the raw media to render (from a
+ *                  pdraw_media_info structure); if zero the first raw media
+ *                  found is used for rendering
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_video_renderer_set_media_id(struct pdraw *pdraw,
+				  struct pdraw_video_renderer *renderer,
+				  unsigned int media_id);
+
+
+/**
+ * Get the video renderer media identifier.
+ * This function retrieves the identifier of the media on which the rendering
+ * is done.
+ * @warning: this function must be called from the application's rendering
+ * thread.
+ * @param pdraw: PDrAW instance handle
+ * @param renderer: renderer handle
+ * @return the identifier of the media on success, 0 if no media is being
+ *         renderered or in case of error
+ */
+PDRAW_API unsigned int
+pdraw_video_renderer_get_media_id(struct pdraw *pdraw,
+				  struct pdraw_video_renderer *renderer);
+
+
+/**
+ * Set the video renderer parameters.
+ * This function updates the rendering parameters on a running video renderer.
+ * The params structure must be provided but all parameters are optional and
+ * can be left null.
+ * @warning: this function must be called from the application's rendering
+ * thread.
+ * @param pdraw: PDrAW instance handle
+ * @param renderer: renderer handle
+ * @param params: renderer parameters
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_video_renderer_set_params(
+	struct pdraw *pdraw,
+	struct pdraw_video_renderer *renderer,
+	const struct pdraw_video_renderer_params *params);
+
+
+/**
+ * Get the video renderer parameters.
+ * This function retrieves the rendering parameters on a running video renderer.
+ * The provided params structure is filled by the function.
+ * @warning: this function must be called from the application's rendering
+ * thread.
+ * @param pdraw: PDrAW instance handle
+ * @param renderer: renderer handle
+ * @param params: renderer parameters (output)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_video_renderer_get_params(struct pdraw *pdraw,
+				struct pdraw_video_renderer *renderer,
+				struct pdraw_video_renderer_params *params);
+
+
+/**
+ * Render the video.
+ * This function renders the video with the current rendering position and
+ * rendering parameters.
+ * For render-on-demand, consider using the render_ready callback function
+ * which is called both when a new frame is ready for rendering and
+ * periodically. Note that the render_ready callback function is called from
+ * the pomp_loop thread, not the rendering thread; the synchronization is up
+ * to the caller.
+ * If a content_pos structure is provided, it is filled with the actual position
+ * and size of the video within the rendering position; these coordinates are
+ * in pixels from the bottom-left corner (OpenGL coordinates).
+ * @warning: this function must be called from the application's rendering
+ * thread.
+ * @param pdraw: PDrAW instance handle
+ * @param renderer: renderer handle
+ * @param content_pos: video content position (output; optional, can be null)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_video_renderer_render(struct pdraw *pdraw,
+					  struct pdraw_video_renderer *renderer,
+					  struct pdraw_rect *content_pos);
+
+
+/**
+ * Render the video with provided matrices.
+ * This function renders the video with the current rendering position and
+ * rendering parameters, and the provided view and projection matrices.
+ * The view_mat and proj_mat matrices are 4x4 OpenGL matrices.
+ * For render-on-demand, consider using the render_ready callback function
+ * which is called both when a new frame is ready for rendering and
+ * periodically. Note that the render_ready callback function is called from
+ * the pomp_loop thread, not the rendering thread; the synchronization is up
+ * to the caller.
+ * If a content_pos structure is provided, it is filled with the actual position
+ * and size of the video within the rendering position; these coordinates are
+ * in pixels from the bottom-left corner (OpenGL coordinates).
+ * @warning: this function must be called from the application's rendering
+ * thread.
+ * @param pdraw: PDrAW instance handle
+ * @param renderer: renderer handle
+ * @param content_pos: video content position (output; optional, can be null)
+ * @param view_mat: 4x4 view matrix
+ * @param proj_mat: 4x4 projection matrix
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_video_renderer_render_mat(struct pdraw *pdraw,
+				struct pdraw_video_renderer *renderer,
+				struct pdraw_rect *content_pos,
+				const float *view_mat,
+				const float *proj_mat);
+
+
+/**
+ * Video sink API
+ */
+
+/**
+ * Create a coded video sink.
+ * This function creates a coded video sink on a media of the given media_id.
+ * The media idenfifiers are known when the media_added or media_removed
+ * general callback functions are called.
+ * Once the sink is created, video frames are retrieved by getting them
+ * from the queue returned by the pdraw_coded_video_sink_get_queue() function.
+ * Once a video sink is no longer used, it must be destroyed by calling the
+ * pdraw_coded_video_sink_destroy() function.
+ * The params structure must be provided but all parameters are optional and
+ * can be left null.
+ * The callbacks structure must be provided and the flush callback function is
+ * required to be implemented; all callback functions are called from the
+ * pomp_loop thread. When the flush callback function is called, the
+ * application must flush the sink queue by calling
+ * mbuf_coded_video_frame_queue_flush() and must return all frames outside of
+ * the queue by calling mbuf_coded_video_frame_unref(); once the flushing is
+ * complete, the pdraw_coded_video_sink_queue_flushed() function must be called.
+ *
+ * @note media_id must refer to a coded video media.
+ *
+ * @param pdraw: PDrAW instance handle
+ * @param media_id: identifier of the media on which to create the sink
+ * @param params: video sink parameters
+ * @param cbs: video sink callback functions
+ * @param userdata: callback functions user data (optional, can be null)
+ * @param ret_obj: video sink handle (output)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_coded_video_sink_new(struct pdraw *pdraw,
+			   unsigned int media_id,
+			   const struct pdraw_video_sink_params *params,
+			   const struct pdraw_coded_video_sink_cbs *cbs,
+			   void *userdata,
+			   struct pdraw_coded_video_sink **ret_obj);
+
+
+/**
+ * Destroy a coded video sink.
+ * This function stops a running video sink and frees the associated resources.
+ * A video sink must not be destroyed unless all frames outside of the queue
+ * have been returned by calling mbuf_coded_video_frame_unref(). Once a video
+ * sink is destroyed the queue returned by pdraw_coded_video_sink_get_queue()
+ * must no longer be used.
+ * @param pdraw: PDrAW instance handle
+ * @param sink: video sink handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_coded_video_sink_destroy(struct pdraw *pdraw,
+			       struct pdraw_coded_video_sink *sink);
+
+
+/**
+ * Resynchronize a coded video sink.
+ * This function schedules the output of a synchronization frame (IDR) for a
+ * running video sink. It can be used for example in case of unrecoverable video
+ * decoder errors to restart decoding. After a video sink creation, the first
+ * frame that is output is always a synchronization frame; therefore it is not
+ * necessary to call this function immediately after a video sink creation.
+ * @param pdraw: PDrAW instance handle
+ * @param sink: video sink handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_coded_video_sink_resync(struct pdraw *pdraw,
+			      struct pdraw_coded_video_sink *sink);
+
+
+/**
+ * Get the coded video sink frame queue.
+ * This function returns the frame queue to use in order to retrieve frames
+ * from a running video sink. Frames are retrieved from the queue by using the
+ * mbuf_coded_video_frame_queue_pop() function.
+ * @param pdraw: PDrAW instance handle
+ * @param sink: video sink handle
+ * @return a pointer on a mbuf_coded_video_frame_queue object on success, NULL
+ * in case of error
+ */
+PDRAW_API struct mbuf_coded_video_frame_queue *
+pdraw_coded_video_sink_get_queue(struct pdraw *pdraw,
+				 struct pdraw_coded_video_sink *sink);
+
+
+/**
+ * Signal that a coded video sink has been flushed.
+ * This function is used to signal that flushing is complete. When the flush
+ * video sink callback function is called, the application must flush the sink
+ * queue by calling mbuf_coded_video_frame_queue_flush() and must return all
+ * frames outside of the queue by calling mbuf_coded_video_frame_unref(); once
+ * the flushing is complete, this function must be called.
+ * @param pdraw: PDrAW instance handle
+ * @param sink: video sink handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_coded_video_sink_queue_flushed(struct pdraw *pdraw,
+				     struct pdraw_coded_video_sink *sink);
+
+
+/**
+ * Create a raw video sink.
+ * This function creates a raw video sink on a media of the given media_id.
+ * The media idenfifiers are known when the media_added or media_removed
+ * general callback functions are called.
+ * Once the sink is created, video frames are retrieved by getting them
+ * from the queue returned by the pdraw_raw_video_sink_get_queue() function.
+ * Once a video sink is no longer used, it must be destroyed by calling the
+ * pdraw_raw_video_sink_destroy() function.
+ * The params structure must be provided but all parameters are optional and
+ * can be left null.
+ * The callbacks structure must be provided and the flush callback function is
+ * required to be implemented; all callback functions are called from the
+ * pomp_loop thread. When the flush callback function is called, the
+ * application must flush the sink queue by calling
+ * mbuf_raw_video_frame_queue_flush() and must return all frames outside of
+ * the queue by calling mbuf_raw_video_frame_unref(); once the flushing is
+ * complete, the pdraw_raw_video_sink_queue_flushed() function must be called.
+ *
+ * @note media_id must refer to a raw video media.
+ *
+ * @param pdraw: PDrAW instance handle
+ * @param media_id: identifier of the media on which to create the sink
+ * @param params: video sink parameters
+ * @param cbs: video sink callback functions
+ * @param userdata: callback functions user data (optional, can be null)
+ * @param ret_obj: video sink handle (output)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_raw_video_sink_new(struct pdraw *pdraw,
+			 unsigned int media_id,
+			 const struct pdraw_video_sink_params *params,
+			 const struct pdraw_raw_video_sink_cbs *cbs,
+			 void *userdata,
+			 struct pdraw_raw_video_sink **ret_obj);
+
+
+/**
+ * Destroy a raw video sink.
+ * This function stops a running video sink and frees the associated resources.
+ * A video sink must not be destroyed unless all frames outside of the queue
+ * have been returned by calling mbuf_raw_video_frame_unref(). Once a video
+ * sink is destroyed the queue returned by pdraw_raw_video_sink_get_queue() must
+ * no longer be used.
+ * @param pdraw: PDrAW instance handle
+ * @param sink: video sink handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_raw_video_sink_destroy(struct pdraw *pdraw,
+					   struct pdraw_raw_video_sink *sink);
+
+
+/**
+ * Get the raw video sink frame queue.
+ * This function returns the frame queue to use in order to retrieve frames
+ * from a running video sink. Frames are retrieved from the queue by using the
+ * mbuf_raw_video_frame_queue_pop() function.
+ * @param pdraw: PDrAW instance handle
+ * @param sink: video sink handle
+ * @return a pointer on a mbuf_raw_video_frame_queue object on success, NULL
+ * in case of error
+ */
+PDRAW_API struct mbuf_raw_video_frame_queue *
+pdraw_raw_video_sink_get_queue(struct pdraw *pdraw,
+			       struct pdraw_raw_video_sink *sink);
+
+
+/**
+ * Signal that a raw video sink has been flushed.
+ * This function is used to signal that flushing is complete. When the flush
+ * video sink callback function is called, the application must flush the sink
+ * queue by calling mbuf_raw_video_frame_queue_flush() and must return all
+ * frames outside of the queue by calling mbuf_raw_video_frame_unref(); once
+ * the flushing is complete, this function must be called.
+ * @param pdraw: PDrAW instance handle
+ * @param sink: video sink handle
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_raw_video_sink_queue_flushed(struct pdraw *pdraw,
+				   struct pdraw_raw_video_sink *sink);
+
+
+/**
+ * Settings API
+ */
+
+/**
+ * Get the PDrAW instance friendly name.
+ * This function fills the str array with the null-terminated friendly name.
+ * The string must have been previously allocated. The function writes up to
+ * len characters. The friendly name is generally either the device's friendly
+ * name (e.g. "Bob's phone") or the application's name (e.g.
+ * "MyDroneControllerApp"). It is used for example in metadata exchanged with a
+ * streaming server.
+ * @param pdraw: PDrAW instance handle
+ * @param str: pointer to the string to write to (output)
+ * @param len: maximum length of the string
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_get_friendly_name_setting(struct pdraw *pdraw, char *str, size_t len);
+
+
+/**
+ * Set the PDrAW instance friendly name.
+ * The friendly_name string is copied internally. The friendly name is generally
+ * either the device's friendly name (e.g. "Bob's phone") or the application's
+ * name (e.g. "MyDroneControllerApp"). It is used for example in metadata
+ * exchanged with a streaming server. Setting the friendly name value is
+ * optional.
+ * @param pdraw: PDrAW instance handle
+ * @param friendly_name: pointer to the friendly name string
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_set_friendly_name_setting(struct pdraw *pdraw,
+					      const char *friendly_name);
+
+
+/**
+ * Get the PDrAW instance serial number.
+ * This function fills the str array with the null-terminated serial number.
+ * The string must have been previously allocated. The function writes up to
+ * len characters. The serial number is generally the unique serial number of
+ * the device on which PDrAW is running. It is used for example in metadata
+ * exchanged with a streaming server.
+ * @param pdraw: PDrAW instance handle
+ * @param str: pointer to the string to write to (output)
+ * @param len: maximum length of the string
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_get_serial_number_setting(struct pdraw *pdraw, char *str, size_t len);
+
+
+/**
+ * Set the PDrAW instance serial number.
+ * The serial_number string is copied internally. The serial number is generally
+ * the unique serial number of the device on which PDrAW is running. It is used
+ * for example in metadata exchanged with a streaming server. Setting the serial
+ * number value is recommended as it is used as a unique identifier in the
+ * streaming protocols.
+ * @param pdraw: PDrAW instance handle
+ * @param serial_number: pointer to the serial number string
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_set_serial_number_setting(struct pdraw *pdraw,
+					      const char *serial_number);
+
+
+/**
+ * Get the PDrAW instance software version.
+ * This function fills the str array with the null-terminated software version.
+ * The string must have been previously allocated. The function writes up to
+ * len characters. The software version is generally the version number of the
+ * application running PDrAW (e.g. "MyApp v1.2.3"). It is used for example in
+ * metadata exchanged with a streaming server.
+ * @param pdraw: PDrAW instance handle
+ * @param str: pointer to the string to write to (output)
+ * @param len: maximum length of the string
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_get_software_version_setting(struct pdraw *pdraw, char *str, size_t len);
+
+
+/**
+ * Set the PDrAW instance software version.
+ * The software_version string is copied internally. The software version is
+ * generally the version number of the application running PDrAW (e.g.
+ * "MyApp v1.2.3"). It is used for example in metadata exchanged with a
+ * streaming server. Setting the software version value is optional.
+ * @param pdraw: PDrAW instance handle
+ * @param software_version: pointer to the software version string
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_set_software_version_setting(struct pdraw *pdraw,
+						 const char *software_version);
+
+
+/**
+ * Get the pipeline mode setting.
+ * This function returns the pipeline mode of a PDrAW instance. The pipeline
+ * mode controls whether to decode the selected video media (for full processing
+ * up to the rendering), or to disable video decoding (e.g. when no rendering
+ * is required, only a coded video sink).
+ * @param pdraw: PDrAW instance handle
+ * @return the pipeline mode, or PDRAW_PIPELINE_MODE_DECODE_ALL in case of error
+ */
+PDRAW_API enum pdraw_pipeline_mode
+pdraw_get_pipeline_mode_setting(struct pdraw *pdraw);
+
+
+/**
+ * Set the pipeline mode setting.
+ * This function sets the pipeline mode of a PDrAW instance. This function can
+ * be called only prior to any open operation. The pipeline mode controls
+ * whether to decode the selected video media (for full processing up to the
+ * rendering), or to disable video decoding (e.g. when no rendering is required,
+ * only an coded video sink).
+ * @param pdraw: PDrAW instance handle
+ * @param mode: pipeline mode
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_set_pipeline_mode_setting(struct pdraw *pdraw,
+					      enum pdraw_pipeline_mode mode);
+
+
+/**
+ * Get the display screen settings.
+ * This function returns the display screen settings through the xdpi, ydpi and
+ * device_margin_* parameters. This is only useful if HMD distortion correction
+ * is enabled in the video rendering. The xdpi and ydpi are pixel densities in
+ * dots per inches. The device margins are in millimeters.
+ * @param pdraw: PDrAW instance handle
+ * @param xdpi: horizontal pixel density (output)
+ * @param ydpi: vertical pixel density (output)
+ * @param device_margin_top: top device margin (output)
+ * @param device_margin_bottom: bottom device margin (output)
+ * @param device_margin_left: left device margin (output)
+ * @param device_margin_right: right device margin (output)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_get_display_screen_settings(struct pdraw *pdraw,
+						float *xdpi,
+						float *ydpi,
+						float *device_margin_top,
+						float *device_margin_bottom,
+						float *device_margin_left,
+						float *device_margin_right);
+
+
+/**
+ * Set the display screen settings.
+ * This function sets the display screen settings. This is only useful if HMD
+ * distortion correction is enabled in the video rendering. The xdpi and ydpi
+ * are pixel densities in dots per inches. The device margins are in
+ * millimeters.
+ * @param pdraw: PDrAW instance handle
+ * @param xdpi: horizontal pixel density
+ * @param ydpi: vertical pixel density
+ * @param device_margin_top: top device margin
+ * @param device_margin_bottom: bottom device margin
+ * @param device_margin_left: left device margin
+ * @param device_margin_right: right device margin
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_set_display_screen_settings(struct pdraw *pdraw,
+						float xdpi,
+						float ydpi,
+						float device_margin_top,
+						float device_margin_bottom,
+						float device_margin_left,
+						float device_margin_right);
+
+
+/**
+ * Get the HMD model setting.
+ * This function returns the head-mounted display (HMD) model. This is only
+ * useful if HMD distortion correction is enabled in the video rendering.
+ * @param pdraw: PDrAW instance handle
+ * @return the HMD model, or PDRAW_HMD_MODEL_UNKNOWN in case of error
+ */
+PDRAW_API enum pdraw_hmd_model pdraw_get_hmd_model_setting(struct pdraw *pdraw);
+
+
+/**
+ * Set the HMD model setting.
+ * This function sets the head-mounted display (HMD) model. This is only
+ * useful if HMD distortion correction is enabled in the video rendering.
+ * @param pdraw: PDrAW instance handle
+ * @param hmd_model: HMD model
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_set_hmd_model_setting(struct pdraw *pdraw,
+					  enum pdraw_hmd_model hmd_model);
+
+/**
+ * Platform-specific API
+ */
+
+/**
+ * Set the Android JVM pointer.
+ * This function sets the JVM pointer for internal calls to the Android SDK API.
+ * This is only useful on Android and is ignored on other platforms. If the
+ * JVM pointer is not provided on Android platforms, some features may not be
+ * available.
+ * @param pdraw: PDrAW instance handle
+ * @param jvm: JVM pointer
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_set_android_jvm(struct pdraw *pdraw, void *jvm);
+
+
+/**
+ * Debug API
+ */
+
+/**
+ * Dump the current pipeline as a directed graph using the DOT file format.
+ * @param pdraw: PDrAW instance handle
+ * @param file_name: DOT file to write to
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_dump_pipeline(struct pdraw *pdraw, const char *file_name);
+
+
+/**
+ * Helpers
+ */
+
+/**
+ * ToString function for enum pdraw_hmd_model.
+ * @param val: HMD model value to convert
+ * @return a string description of the HMD model
+ */
+PDRAW_API const char *pdraw_hmd_model_str(enum pdraw_hmd_model val);
+
+
+/**
+ * ToString function for enum pdraw_pipeline_mode.
+ * @param val: pipeline mode value to convert
+ * @return a string description of the pipeline mode
+ */
+PDRAW_API const char *pdraw_pipeline_mode_str(enum pdraw_pipeline_mode val);
+
+
+/**
+ * ToString function for enum pdraw_playback_type.
+ * @param val: playback type value to convert
+ * @return a string description of the playback type
+ */
+PDRAW_API const char *pdraw_playback_type_str(enum pdraw_playback_type val);
+
+
+/**
+ * ToString function for enum pdraw_media_type.
+ * @param val: media type value to convert
+ * @return a string description of the media type
+ */
+PDRAW_API const char *pdraw_media_type_str(enum pdraw_media_type val);
+
+
+/**
+ * ToString function for enum pdraw_video_type.
+ * @param val: video type value to convert
+ * @return a string description of the video type
+ */
+PDRAW_API const char *pdraw_video_type_str(enum pdraw_video_type val);
+
+
+/**
+ * ToString function for enum pdraw_histogram_channel.
+ * @param val: histogram channel value to convert
+ * @return a string description of the histogram channel
+ */
+PDRAW_API const char *
+pdraw_histogram_channel_str(enum pdraw_histogram_channel val);
+
+
+/**
+ * ToString function for enum pdraw_video_renderer_scheduling_mode.
+ * @param val: video renderer scheduling mode value to convert
+ * @return a string description of the video renderer scheduling mode
+ */
+PDRAW_API const char *pdraw_video_renderer_scheduling_mode_str(
+	enum pdraw_video_renderer_scheduling_mode val);
+
+
+/**
+ * ToString function for enum pdraw_video_renderer_fill_mode.
+ * @param val: video renderer fill mode value to convert
+ * @return a string description of the video renderer fill mode
+ */
+PDRAW_API const char *
+pdraw_video_renderer_fill_mode_str(enum pdraw_video_renderer_fill_mode val);
+
+
+/**
+ * ToString function for enum pdraw_video_renderer_transition_flag.
+ * @param val: video renderer transition flag value to convert
+ * @return a string description of the video renderer transition flag
+ */
+PDRAW_API const char *pdraw_video_renderer_transition_flag_str(
+	enum pdraw_video_renderer_transition_flag val);
+
+
+/**
+ * Convert a video frame metadata structure to a JSON object.
+ * The JSON object must have been previously created. The function appends
+ * new elements in this object.
+ * @param frame: pointer to a video frame structure
+ * @param metadata: optional pointer to the frame metadata
+ * @param jobj: pointer to a JSON object to fill (output)
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int pdraw_video_frame_to_json(const struct pdraw_video_frame *frame,
+					struct vmeta_frame *metadata,
+					struct json_object *jobj);
+
+
+/**
+ * Convert a video frame metadata structure to a JSON string.
+ * This function fills the str array with the null-terminated JSON string.
+ * The string must have been previously allocated. The function writes
+ * up to len characters.
+ * @param frame: pointer to a video frame structure
+ * @param metadata: optional pointer to the frame metadata
+ * @param str: pointer to the string to write to (output)
+ * @param len: maximum length of the string
+ * @return 0 on success, negative errno value in case of error
+ */
+PDRAW_API int
+pdraw_video_frame_to_json_str(const struct pdraw_video_frame *frame,
+			      struct vmeta_frame *metadata,
+			      char *str,
+			      unsigned int len);
+
+/**
+ * Duplicate a media_info structure.
+ * @param src: pointer to the media_info structure to duplicate
+ * @return a pointer to the newly allocated structure or NULL on error.
+ */
+PDRAW_API struct pdraw_media_info *
+pdraw_media_info_dup(const struct pdraw_media_info *src);
+
+
+/**
+ * Free a media_info structure.
+ * @param media_info: pointer to the media_info structure to free
+ */
+PDRAW_API void pdraw_media_info_free(struct pdraw_media_info *media_info);
+
+
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */
+
+#endif /* !_PDRAW_H_ */
