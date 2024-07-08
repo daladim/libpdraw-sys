@@ -3,10 +3,8 @@ use std::path::PathBuf;
 
 fn main() {
     let bindings = bindgen::Builder::default()
-
         // This works around the missing 'vmeta.pb-c.h' included in vmeta_frame_proto.h
         .clang_arg("-D_VMETA_FRAME_PROTO_H_")
-
         // Set the possible folders where the header files should be searched in
         .clang_arg("-Iinclude/")
         .clang_arg("-Iinclude/libfutils")
@@ -26,12 +24,10 @@ fn main() {
         .clang_arg("-Iinclude/libvideo-metadata")
         .clang_arg("-Iinclude/libvideo-scale")
         .clang_arg("-Iinclude/libvideo-streaming")
-
         // The input header we would like to generate bindings for.
         .header("wrapper.h")
         // Tell cargo to invalidate the built crate whenever any of the included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-
         .generate()
         .expect("Unable to generate bindings");
 
